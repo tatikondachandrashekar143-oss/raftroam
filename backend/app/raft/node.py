@@ -40,3 +40,21 @@ class RaftNode:
             raise RuntimeError("Only a candidate can become leader")
 
         self.state = NodeState.LEADER
+    
+    def request_vote(self, candidate_id: str, candidate_term: int) -> bool:
+        """Grant a vote only if the candidate's term is current or newer
+        and this node has not voted for another candidate in that term.
+        """
+        if candidate_term < self.current_term:
+            return False
+
+        if candidate_term > self.current_term:
+            self.become_follower(candidate_term)
+
+        if self.voted_for is None or self.voted_for == candidate_id:
+            self.voted_for = candidate_id
+            self.state = NodeState.FOLLOWER
+            return True
+
+        return False
+

@@ -38,3 +38,25 @@ def test_old_term_is_rejected():
         assert False, "Expected ValueError"
     except ValueError:
         pass
+
+def test_vote_granted_for_new_term():
+    node = RaftNode("node-2", ["node-1", "node-3"])
+
+    assert node.request_vote("node-1", 1) is True
+    assert node.current_term == 1
+    assert node.voted_for == "node-1"
+
+
+def test_node_rejects_second_candidate_in_same_term():
+    node = RaftNode("node-2", ["node-1", "node-3"])
+
+    assert node.request_vote("node-1", 1) is True
+    assert node.request_vote("node-3", 1) is False
+
+
+def test_node_rejects_old_term():
+    node = RaftNode("node-2", ["node-1", "node-3"])
+    node.current_term = 3
+
+    assert node.request_vote("node-1", 2) is False
+    assert node.current_term == 3
