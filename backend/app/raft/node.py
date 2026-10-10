@@ -1,8 +1,9 @@
 
-from backend.app.raft.state_machine import RaftStateMachine
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
+
+from backend.app.raft.state_machine import RaftStateMachine
 
 
 class NodeState(str, Enum):
@@ -23,9 +24,8 @@ class RaftNode:
     last_applied: int = -1
     log: list[dict] = field(default_factory=list)
     match_index: dict[str, int] = field(default_factory=dict)
+    next_index: dict[str, int] = field(default_factory=dict)
     state_machine: RaftStateMachine = field(default_factory=RaftStateMachine)
-
-
 
     def become_follower(self, term: int) -> None:
         if term < self.current_term:
@@ -45,10 +45,19 @@ class RaftNode:
             raise RuntimeError("Only a candidate can become leader")
 
         self.state = NodeState.LEADER
-    
+
+        last_log_index = len(self.log)
+
+        self.next_index = {
+            peer: last_log_index for peer in self.peers
+        }
+        self.match_index = {
+            peer: -1 for peer in self.peers
+        }
+
     def request_vote(self, candidate_id: str, candidate_term: int) -> bool:
-        """Grant a vote only if the candidate's term is current or newer
-        and this node has not voted for another candidate in that term.
+        """Grant a vote if the term is valid and this node has not voted
+        for another candidate in that term.
         """
         if candidate_term < self.current_term:
             return False
@@ -62,9 +71,9 @@ class RaftNode:
             return True
 
         return False
-    
+
     def receive_heartbeat(self, leader_id: str, leader_term: int) -> bool:
-        """Accept a valid heartbeat from the current or a newer term."""
+        """Accept a heartbeat from the current or a newer term."""
         if leader_term < self.current_term:
             return False
 
@@ -75,9 +84,6 @@ class RaftNode:
         self.state = NodeState.FOLLOWER
         return True
 
-
-
-    
     def append_entry(self, command: dict) -> int:
         """Append a command to this node's log if it is the leader."""
         if self.state != NodeState.LEADER:
@@ -90,7 +96,6 @@ class RaftNode:
         self.log.append(entry)
         return len(self.log) - 1
 
-    
     def receive_append_entries(
         self,
         leader_term: int,
@@ -101,18 +106,16 @@ class RaftNode:
     ) -> bool:
         """Validate and append entries received from a leader."""
 
-        # Reject requests from an older term.
         if leader_term < self.current_term:
             return False
 
-        # A newer-term leader causes this node to step down.
         if leader_term > self.current_term:
             self.current_term = leader_term
             self.voted_for = None
 
         self.state = NodeState.FOLLOWER
 
-        # Verify that the preceding log entry matches.
+        # Verify the preceding log entry.
         if prev_log_index >= 0:
             if prev_log_index >= len(self.log):
                 return False
@@ -120,7 +123,6 @@ class RaftNode:
             if self.log[prev_log_index]["term"] != prev_log_term:
                 return False
 
-        # Verify and append incoming entries without duplicating matches.
         insert_index = prev_log_index + 1
 
         for offset, entry in enumerate(entries):
@@ -130,14 +132,12 @@ class RaftNode:
                 if self.log[index] == entry:
                     continue
 
-                # Never overwrite an already committed entry.
                 if index <= self.commit_index:
                     return False
 
-                # Remove the conflicting suffix before appending.
+                # Replace the conflicting uncommitted suffix.
                 self.log = self.log[:index]
 
-                # Remove replication tracking beyond the retained log.
                 self.match_index = {
                     peer: min(match, len(self.log) - 1)
                     for peer, match in self.match_index.items()
@@ -145,13 +145,11 @@ class RaftNode:
 
             self.log.append(entry)
 
-        # Apply the leader's known commit progress, bounded by our log.
         if leader_commit > self.commit_index:
             self.commit_index = min(leader_commit, len(self.log) - 1)
 
         return True
 
-    
     def record_replication(self, follower_id: str, index: int) -> None:
         """Record the highest log index replicated to a follower."""
         if follower_id not in self.peers:
@@ -172,22 +170,22 @@ class RaftNode:
             if self.log[index]["term"] != self.current_term:
                 continue
 
-            replicated = 1
-            replicated += sum(
+            replicated = 1 + sum(
                 1
                 for peer in self.peers
                 if self.match_index.get(peer, -1) >= index
             )
 
             majority = (len(self.peers) + 1) // 2 + 1
+
             if replicated >= majority:
                 self.commit_index = index
                 break
 
         return self.commit_index
-    
+
     def apply_committed_entries(self) -> list[dict]:
-        """Apply committed log entries that have not yet been applied."""
+        """Apply committed entries that have not yet been applied."""
         results = []
 
         while self.last_applied < self.commit_index:
@@ -203,36 +201,50 @@ class RaftNode:
             results.append(result)
 
         return results
-    
+
     def replicate_to_follower(self, follower: "RaftNode") -> bool:
-        """Replicate this leader's log to a follower and record its acknowledgement."""
+        """Replicate entries using the follower's next expected index."""
         if self.state != NodeState.LEADER:
             raise RuntimeError("Only the leader can replicate entries")
 
-        if follower.node_id not in self.peers:
+        follower_id = follower.node_id
+
+        if follower_id not in self.peers:
             raise ValueError("Unknown follower")
+
+        if follower_id not in self.next_index:
+            self.next_index[follower_id] = len(self.log)
+            self.match_index.setdefault(follower_id, -1)
+
+        next_idx = max(0, min(self.next_index[follower_id], len(self.log)))
+        prev_log_index = next_idx - 1
+
+        prev_log_term = (
+            self.log[prev_log_index]["term"]
+            if prev_log_index >= 0
+            else -1
+        )
+
+        entries = self.log[next_idx:]
 
         success = follower.receive_append_entries(
             leader_term=self.current_term,
-            entries=self.log.copy(),
-            prev_log_index=-1,
-            prev_log_term=-1,
+            entries=entries,
+            prev_log_index=prev_log_index,
+            prev_log_term=prev_log_term,
             leader_commit=self.commit_index,
         )
 
         if success:
-            self.record_replication(
-                follower.node_id,
-                len(follower.log) - 1,
+            replicated_index = next_idx + len(entries) - 1
+
+            self.match_index[follower_id] = max(
+                self.match_index.get(follower_id, -1),
+                replicated_index,
             )
+            self.next_index[follower_id] = replicated_index + 1
+        else:
+            self.next_index[follower_id] = max(0, next_idx - 1)
 
         return success
-
-
-    
-    
-        
-    
-
-
 
