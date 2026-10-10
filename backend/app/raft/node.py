@@ -90,22 +90,67 @@ class RaftNode:
         self.log.append(entry)
         return len(self.log) - 1
 
+    
     def receive_append_entries(
         self,
         leader_term: int,
         entries: list[dict],
+        prev_log_index: int = -1,
+        prev_log_term: int = -1,
+        leader_commit: int = -1,
     ) -> bool:
-        """Accept entries from a leader with a valid term."""
+        """Validate and append entries received from a leader."""
+
+        # Reject requests from an older term.
         if leader_term < self.current_term:
             return False
 
+        # A newer-term leader causes this node to step down.
         if leader_term > self.current_term:
             self.current_term = leader_term
             self.voted_for = None
 
         self.state = NodeState.FOLLOWER
-        self.log.extend(entries)
+
+        # Verify that the preceding log entry matches.
+        if prev_log_index >= 0:
+            if prev_log_index >= len(self.log):
+                return False
+
+            if self.log[prev_log_index]["term"] != prev_log_term:
+                return False
+
+        # Verify and append incoming entries without duplicating matches.
+        insert_index = prev_log_index + 1
+
+        for offset, entry in enumerate(entries):
+            index = insert_index + offset
+
+            if index < len(self.log):
+                if self.log[index] == entry:
+                    continue
+
+                # Never overwrite an already committed entry.
+                if index <= self.commit_index:
+                    return False
+
+                # Remove the conflicting suffix before appending.
+                self.log = self.log[:index]
+
+                # Remove replication tracking beyond the retained log.
+                self.match_index = {
+                    peer: min(match, len(self.log) - 1)
+                    for peer, match in self.match_index.items()
+                }
+
+            self.log.append(entry)
+
+        # Apply the leader's known commit progress, bounded by our log.
+        if leader_commit > self.commit_index:
+            self.commit_index = min(leader_commit, len(self.log) - 1)
+
         return True
+
     
     def record_replication(self, follower_id: str, index: int) -> None:
         """Record the highest log index replicated to a follower."""
@@ -159,6 +204,9 @@ class RaftNode:
 
         return results
 
+    
+    
+        
     
 
 
