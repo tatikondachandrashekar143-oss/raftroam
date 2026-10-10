@@ -57,4 +57,16 @@ class RaftNode:
             return True
 
         return False
+    
+    def receive_heartbeat(self, leader_id: str, leader_term: int) -> bool:
+        """Accept a valid heartbeat from the current or a newer term."""
+        if leader_term < self.current_term:
+            return False
+
+        if leader_term > self.current_term:
+            self.current_term = leader_term
+            self.voted_for = None
+
+        self.state = NodeState.FOLLOWER
+        return True
 
