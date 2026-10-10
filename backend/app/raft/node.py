@@ -203,6 +203,31 @@ class RaftNode:
             results.append(result)
 
         return results
+    
+    def replicate_to_follower(self, follower: "RaftNode") -> bool:
+        """Replicate this leader's log to a follower and record its acknowledgement."""
+        if self.state != NodeState.LEADER:
+            raise RuntimeError("Only the leader can replicate entries")
+
+        if follower.node_id not in self.peers:
+            raise ValueError("Unknown follower")
+
+        success = follower.receive_append_entries(
+            leader_term=self.current_term,
+            entries=self.log.copy(),
+            prev_log_index=-1,
+            prev_log_term=-1,
+            leader_commit=self.commit_index,
+        )
+
+        if success:
+            self.record_replication(
+                follower.node_id,
+                len(follower.log) - 1,
+            )
+
+        return success
+
 
     
     
