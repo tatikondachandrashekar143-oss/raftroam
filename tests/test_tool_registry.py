@@ -94,3 +94,34 @@ def test_delete_tool_only_takes_effect_after_commit(registry):
     assert registry.get_tool("search_flights") is None
     assert registry.list_tools() == []
 
+def test_tool_update_is_invisible_until_committed(registry):
+    original_tool = {
+        "name": "search_flights",
+        "description": "Search domestic flights",
+    }
+
+    updated_tool = {
+        "name": "search_flights",
+        "description": "Search domestic and international flights",
+    }
+
+    # Register and commit the original tool.
+    registry.register_tool(original_tool)
+    registry.node.commit_index = 0
+    registry.node.apply_committed_entries()
+
+    assert registry.get_tool("search_flights") == original_tool
+
+    # Append an update, but do not commit it yet.
+    result = registry.register_tool(updated_tool)
+
+    assert result["committed"] is False
+    assert registry.get_tool("search_flights") == original_tool
+
+    # Commit and apply the update.
+    registry.node.commit_index = 1
+    registry.node.apply_committed_entries()
+
+    assert registry.get_tool("search_flights") == updated_tool
+
+
