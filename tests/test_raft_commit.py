@@ -38,3 +38,12 @@ def test_unknown_follower_is_rejected():
 
     with pytest.raises(ValueError):
         leader.record_replication("node-9", 0)
+
+def test_old_term_entry_is_not_committed_directly():
+    leader = make_leader()
+
+    # Simulate an entry from an older term.
+    leader.log[0]["term"] = leader.current_term - 1
+    leader.record_replication("node-2", 0)
+
+    assert leader.advance_commit_index() == -1
