@@ -3,17 +3,28 @@ from backend.app.raft.node import NodeState, RaftNode
 
 
 def run_election(candidate: RaftNode, nodes: list[RaftNode]) -> bool:
-    """Ask cluster peers for votes and elect a leader if a majority agrees."""
+    """Elect a leader only when an available candidate wins a majority."""
+
+    if not candidate.available:
+        return False
+
     candidate.become_candidate()
 
-    votes = 1  # The candidate votes for itself.
+    votes = 1
     majority = (len(nodes) // 2) + 1
 
     for node in nodes:
         if node.node_id == candidate.node_id:
             continue
 
-        granted = node.request_vote(candidate.node_id, candidate.current_term)
+        if not node.available:
+            continue
+
+        granted = node.request_vote(
+            candidate.node_id,
+            candidate.current_term,
+        )
+
         if granted:
             votes += 1
 

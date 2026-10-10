@@ -16,6 +16,7 @@ class NodeState(str, Enum):
 class RaftNode:
     node_id: str
     peers: list[str]
+    available: bool = True
 
     state: NodeState = NodeState.FOLLOWER
     current_term: int = 0
@@ -36,11 +37,17 @@ class RaftNode:
         self.voted_for = None
 
     def become_candidate(self) -> None:
+        if not self.available:
+            raise RuntimeError("Unavailable node cannot become a candidate")
+
         self.current_term += 1
         self.state = NodeState.CANDIDATE
         self.voted_for = self.node_id
 
     def become_leader(self) -> None:
+        if not self.available:
+            raise RuntimeError("Unavailable node cannot become leader")
+
         if self.state != NodeState.CANDIDATE:
             raise RuntimeError("Only a candidate can become leader")
 
@@ -56,9 +63,10 @@ class RaftNode:
         }
 
     def request_vote(self, candidate_id: str, candidate_term: int) -> bool:
-        """Grant a vote if the term is valid and this node has not voted
-        for another candidate in that term.
-        """
+        """Grant a vote if available and the term and vote are valid."""
+        if not self.available:
+            return False
+
         if candidate_term < self.current_term:
             return False
 
@@ -73,7 +81,10 @@ class RaftNode:
         return False
 
     def receive_heartbeat(self, leader_id: str, leader_term: int) -> bool:
-        """Accept a heartbeat from the current or a newer term."""
+        """Accept a heartbeat only when this node is available."""
+        if not self.available:
+            return False
+
         if leader_term < self.current_term:
             return False
 
@@ -85,7 +96,10 @@ class RaftNode:
         return True
 
     def append_entry(self, command: dict) -> int:
-        """Append a command to this node's log if it is the leader."""
+        """Append a command only when this node is an available leader."""
+        if not self.available:
+            raise RuntimeError("Unavailable node cannot append entries")
+
         if self.state != NodeState.LEADER:
             raise RuntimeError("Only the leader can append new entries")
 
@@ -104,7 +118,9 @@ class RaftNode:
         prev_log_term: int = -1,
         leader_commit: int = -1,
     ) -> bool:
-        """Validate and append entries received from a leader."""
+        """Validate and append entries only when this node is available."""
+        if not self.available:
+            return False
 
         if leader_term < self.current_term:
             return False
@@ -163,6 +179,9 @@ class RaftNode:
 
     def advance_commit_index(self) -> int:
         """Advance commit index when a current-term entry has a majority."""
+        if not self.available:
+            raise RuntimeError("Unavailable node cannot advance commit index")
+
         if self.state != NodeState.LEADER:
             raise RuntimeError("Only the leader can advance commit index")
 
@@ -186,6 +205,9 @@ class RaftNode:
 
     def apply_committed_entries(self) -> list[dict]:
         """Apply committed entries that have not yet been applied."""
+        if not self.available:
+            raise RuntimeError("Unavailable node cannot apply entries")
+
         results = []
 
         while self.last_applied < self.commit_index:
@@ -203,7 +225,10 @@ class RaftNode:
         return results
 
     def replicate_to_follower(self, follower: "RaftNode") -> bool:
-        """Replicate entries using the follower's next expected index."""
+        """Replicate entries from an available leader to a follower."""
+        if not self.available:
+            raise RuntimeError("Unavailable node cannot replicate entries")
+
         if self.state != NodeState.LEADER:
             raise RuntimeError("Only the leader can replicate entries")
 
@@ -211,6 +236,9 @@ class RaftNode:
 
         if follower_id not in self.peers:
             raise ValueError("Unknown follower")
+
+        if not follower.available:
+            return False
 
         if follower_id not in self.next_index:
             self.next_index[follower_id] = len(self.log)
@@ -247,4 +275,5 @@ class RaftNode:
             self.next_index[follower_id] = max(0, next_idx - 1)
 
         return success
+
 
