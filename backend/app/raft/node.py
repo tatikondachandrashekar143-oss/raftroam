@@ -70,3 +70,36 @@ class RaftNode:
         self.state = NodeState.FOLLOWER
         return True
 
+
+
+    
+    def append_entry(self, command: dict) -> int:
+        """Append a command to this node's log if it is the leader."""
+        if self.state != NodeState.LEADER:
+            raise RuntimeError("Only the leader can append new entries")
+
+        entry = {
+            "term": self.current_term,
+            "command": command,
+        }
+        self.log.append(entry)
+        return len(self.log) - 1
+
+    def receive_append_entries(
+        self,
+        leader_term: int,
+        entries: list[dict],
+    ) -> bool:
+        """Accept entries from a leader with a valid term."""
+        if leader_term < self.current_term:
+            return False
+
+        if leader_term > self.current_term:
+            self.current_term = leader_term
+            self.voted_for = None
+
+        self.state = NodeState.FOLLOWER
+        self.log.extend(entries)
+        return True
+
+
