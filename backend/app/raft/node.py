@@ -1,4 +1,5 @@
 
+from backend.app.raft.state_machine import RaftStateMachine
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -22,6 +23,8 @@ class RaftNode:
     last_applied: int = -1
     log: list[dict] = field(default_factory=list)
     match_index: dict[str, int] = field(default_factory=dict)
+    state_machine: RaftStateMachine = field(default_factory=RaftStateMachine)
+
 
 
     def become_follower(self, term: int) -> None:
@@ -137,6 +140,26 @@ class RaftNode:
                 break
 
         return self.commit_index
+    
+    def apply_committed_entries(self) -> list[dict]:
+        """Apply committed log entries that have not yet been applied."""
+        results = []
+
+        while self.last_applied < self.commit_index:
+            next_index = self.last_applied + 1
+            entry = self.log[next_index]
+
+            result = self.state_machine.apply(
+                next_index,
+                entry["command"],
+            )
+
+            self.last_applied = next_index
+            results.append(result)
+
+        return results
+
+    
 
 
 
